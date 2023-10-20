@@ -172,7 +172,7 @@ class Packet:
                         urgent_pointer = tcp_header[8]
                         options = tcp_header[9:] if len(option_bytes) != 0 else None
                     case _:
-                        """TCP is the only transport layer protocol supported."""
+                        # TCP is the only transport layer protocol supported.
                         pass
             case EtherType.arp:
                 # https://en.wikipedia.org/wiki/Address_Resolution_Protocol#Packet_structure
