@@ -1,3 +1,1 @@
-.vscode
-.VSCodeCounter
-Lab3-pcap-1/*.tags
+!src
