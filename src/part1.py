@@ -1,6 +1,6 @@
 # PCap file format information found here: https://wiki.wireshark.org/Development/LibpcapFileFormat
 import glob
-from typing import Optional
+from typing import Optional, Callable
 import logging
 import struct
 from collections import defaultdict
@@ -152,6 +152,7 @@ class PcapPacket:
                 dev_logging.warning(
                     f"Link type {self.parent_file.network} not supported."
                 )
+        return self.link_packet
 
 
 class LinkPacket:
@@ -185,6 +186,7 @@ class LinkPacket:
                     "Unsupported link layer packet format.\n"
                     "Only IPv4 and ARP packets supported."
                 )
+        return self.network_packet
 
 
 class EthernetPacket(LinkPacket):
@@ -240,6 +242,7 @@ class NetworkPacket:
                 dev_logging.warning(
                     f"Protocol #{self.get_protocol()} is not supported for the Network Layer."
                 )
+        return self.transport_packet
 
     def get_protocol(self):
         """Implementation in the children."""
@@ -372,7 +375,7 @@ class TransportPacket:
         self.application_packet: Optional[ApplicationPacket] = None
 
     def parse(self):
-        pass
+        return self.application_packet
 
 
 class TCPPacket(TransportPacket):
@@ -444,8 +447,7 @@ class TCPPacket(TransportPacket):
 
 
 class ApplicationPacket:
-    def parse(self):
-        pass
+    pass
 
 
 def main() -> None:
@@ -461,28 +463,23 @@ def main() -> None:
             file.extract_packets()
             file.parse_packets()
 
+            # The parsers run in order (first PcapPacket.parse is ran, then LinkPacket.parse, etc.)
+            # If the result of parsing is None (which means, we have reached the end of the packet, there's nothing more to parse)
+            # For Example: We have an ethernet packet, no network/transport payload. Then parsing the ethernet packet will return None.
+            #              Therefore, the NetworkPacket.parse and TransportPacket.parse methods won't be ran.
+            parsers = [
+                PcapPacket.parse,
+                LinkPacket.parse,
+                NetworkPacket.parse,
+                TransportPacket.parse,
+            ]
+
             for packet in file.pcap_packets:
-                packet.parse()
-
-                link_packet = packet.link_packet
-                if not link_packet:
-                    continue
-                link_packet.parse()
-
-                network_packet = link_packet.network_packet
-                if not network_packet:
-                    continue
-                network_packet.parse()
-
-                transport_packet = network_packet.transport_packet
-                if not transport_packet:
-                    continue
-                transport_packet.parse()
-
-                application_packet = transport_packet.application_packet
-                if not application_packet:
-                    continue
-                application_packet.parse()
+                curr_packet = packet
+                for parser in parsers:
+                    if curr_packet is None:
+                        break
+                    curr_packet = parser(curr_packet)
 
             pcap_files.append(file)
 
