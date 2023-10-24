@@ -1,1 +1,6 @@
-!src/
+# Ignore verything
+*
+# Except .gitignore itself
+!.gitignore
+# And a specific file
+!/src/part1.py
