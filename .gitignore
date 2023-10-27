@@ -2,5 +2,8 @@
 *
 # Except .gitignore itself
 !.gitignore
+# Except for subdirectories
+!*/
 # And specific file
-!/src/part*.py
+!*/src/part1.py
+!*/src/part2.py
