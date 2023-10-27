@@ -2,7 +2,11 @@
 *
 # Except .gitignore itself
 !.gitignore
+
 # Except for src dir
 !/src
 # And all contained py files
 !/src/*.py
+
+# Except for the outputs
+!*_output.txt
