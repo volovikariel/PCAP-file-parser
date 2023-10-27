@@ -279,7 +279,7 @@ class IPv4Packet(NetworkPacket):
             "H"
             # 1 byte /* TTL */
             "B"
-            # 1 byte /* Protcol */
+            # 1 byte /* Protocol */
             "B"
             # 2 bytes /* Header Checksum */
             "h"
@@ -323,7 +323,7 @@ class ARPPacket(NetworkPacket):
         super().__init__(parent_packet, headers, payload)
 
         # https://en.wikipedia.org/wiki/Address_Resolution_Protocol#Packet_structure
-        arpa_header_structure = (
+        header_structure = (
             # Big endian
             ">"
             # 2 bytes /* htype, hardware type */
@@ -346,7 +346,7 @@ class ARPPacket(NetworkPacket):
             "I"
         )
 
-        raw_headers = struct.unpack(arpa_header_structure, self.headers)
+        raw_headers = struct.unpack(header_structure, self.headers)
 
         self.htype = raw_headers[0]
         self.ptype = raw_headers[1]
