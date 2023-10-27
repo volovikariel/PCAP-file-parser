@@ -2,8 +2,7 @@
 *
 # Except .gitignore itself
 !.gitignore
-# Except for subdirectories
-!*/
-# And specific file
-!*/src/part1.py
-!*/src/part2.py
+# Except for src dir
+!/src
+# And all contained py files
+!/src/*.py
