@@ -2,5 +2,5 @@
 *
 # Except .gitignore itself
 !.gitignore
-# And a specific file
-!/src/part1.py
+# And specific file
+!/src/part*.py
