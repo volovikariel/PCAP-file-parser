@@ -1,6 +1,6 @@
 # PCap file format information found here: https://wiki.wireshark.org/Development/LibpcapFileFormat
 import glob
-from typing import Optional, Callable
+from typing import Optional
 import logging
 import struct
 from collections import defaultdict
