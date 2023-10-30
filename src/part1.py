@@ -517,21 +517,13 @@ def main() -> None:
     print("\n#3")
     dst_port_to_packet: dict[str, list[TransportPacket]] = defaultdict(list)
     for packet in all_packets:
-        link_packet = packet.link_packet
-        if not link_packet:
-            continue
-
-        network_packet = link_packet.network_packet
-        if not network_packet:
-            continue
-
-        transport_packet = network_packet.transport_packet
-        if not transport_packet:
-            continue
-        # Non-TCP packets don't have a TCP dst_port
-        if not hasattr(transport_packet, "dst_port"):
-            continue
-        dst_port_to_packet[transport_packet.dst_port].append(packet)
+        try:
+            dst_port_to_packet[
+                packet.link_packet.network_packet.transport_packet.dst_port
+            ].append(packet)
+        # Non-TCP/UDP packets will throw an exception and thus not be added to the dict
+        except:
+            pass
 
     for dst_port, packets in sorted(
         dst_port_to_packet.items(),
@@ -545,29 +537,18 @@ def main() -> None:
     # Making it tuples so as to then be able to sort the IP addresses
     src_ip_dst_port_tuples: set[tuple[ipaddress.IPv4Address, int]] = set()
     for packet in all_packets:
-        link_packet = packet.link_packet
-        if not link_packet:
-            continue
-
-        network_packet = link_packet.network_packet
-        if not network_packet:
-            continue
-        if not hasattr(network_packet, "src_addr"):
-            continue
-
-        transport_packet = network_packet.transport_packet
-        if not transport_packet or not hasattr(transport_packet, "dst_port"):
-            src_ip_dst_port_tuples.add((network_packet.src_addr, None))
-            continue
-        src_ip_dst_port_tuples.add((network_packet.src_addr, transport_packet.dst_port))
+        try:
+            network_packet = packet.link_packet.network_packet
+            transport_packet = network_packet.transport_packet
+            src_ip_dst_port_tuples.add(
+                (network_packet.src_addr, transport_packet.dst_port)
+            )
+        # Non-TCP/UDP packets will throw an exception and thus not be added to the dict
+        except:
+            pass
 
     for src_addr, dst_port in sorted(
         src_ip_dst_port_tuples,
-        key=lambda tuple: (
-            tuple[0],
-            # Make sure it appears last if there's no port number
-            tuple[1] if tuple[1] else -1,
-        ),
         reverse=True,
     ):
         print(f"src IP={str(src_addr)}, dst port={dst_port}")
