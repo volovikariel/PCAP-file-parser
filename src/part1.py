@@ -14,7 +14,7 @@ enable_dev_logging = False
 if not enable_dev_logging:
     dev_logging.setLevel(logging.CRITICAL + 1)
 
-PCAP_DIR = "Lab3-pcap-1"
+PCAP_DIR = "example-files/input/part1"
 
 
 class MagicNumber:
