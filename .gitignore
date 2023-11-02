@@ -1,10 +1,10 @@
 # Ignore verything
 *
-# Except .gitignore itself
+# Except for:
 !.gitignore
-# Except for actual code
+!requirements.txt
 !/src
 !/src/*.py
-# Except for the example files (input/output)
 !/example-files/
 !/example-files/**/*
+!requirements.txt
