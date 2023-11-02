@@ -1,13 +1,13 @@
 # PCap file format information found here: https://wiki.wireshark.org/Development/LibpcapFileFormat
-from typing import Optional
+import argparse
+import ipaddress
 import logging
+import os
 import struct
 from collections import defaultdict
-import ipaddress
-import os
 from io import BytesIO
 from pathlib import Path
-import argparse
+from typing import Optional
 
 dev_logging = logging.Logger("dev")
 enable_dev_logging = False
@@ -56,8 +56,7 @@ class PcapFile:
 
         endianness = "<" if self.magic_number == MagicNumber.little_endian else ">"
         self.header_structure = (
-            endianness
-            +
+            endianness +
             # uint32 magic_number;   /* magic number */
             "I"
             # uint16 version_major;  /* major version number */
@@ -119,8 +118,7 @@ class PcapPacket:
             "<" if self.parent_file.magic_number == MagicNumber.little_endian else ">"
         )
         self.header_structure = (
-            endianness
-            +
+            endianness +
             # uint32 ts_sec;         /* timestamp seconds */
             "I"
             # uint32 ts_usec;        /* timestamp microseconds */
@@ -343,8 +341,7 @@ class IPv4Packet(NetworkPacket):
             # 4 bytes /* src addr */
             "I"
             # 4 bytes /* dst addr */
-            "I"
-            +
+            "I" +
             # (NOT PARSED) Options
             option_bytes
         )
@@ -478,8 +475,7 @@ class TCPPacket(TransportPacket):
             # 2 byte /* checksum */
             "H"
             # 2 byte /* urgent pointer */
-            "H"
-            +
+            "H" +
             # (UNSUPPORTED) Variable /* Options */
             option_bytes
         )
@@ -541,9 +537,11 @@ def main() -> None:
     parser.add_argument("-f", required=True, help="filename")
     parser.add_argument("-t", required=True, help="target IP address")
     prob_group = parser.add_argument_group("Probing")
-    prob_group.add_argument(
-        "-l", default=None, help="width for probing, in seconds", type=int
-    ),
+    (
+        prob_group.add_argument(
+            "-l", default=None, help="width for probing, in seconds", type=int
+        ),
+    )
     prob_group.add_argument(
         "-m", default=None, help="minimum number of packets in probing", type=int
     )
