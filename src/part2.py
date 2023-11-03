@@ -534,23 +534,39 @@ class ApplicationPacket:
 
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("-f", required=True, help="filename")
-    parser.add_argument("-t", required=True, help="target IP address")
-    prob_group = parser.add_argument_group("Probing")
+    parser.add_argument("-f", "--filepath", required=True, help="filename")
+    parser.add_argument("-t", "--target-ip", required=True, help="target IP address")
+    probe_group = parser.add_argument_group("Probing")
     (
-        prob_group.add_argument(
-            "-l", default=None, help="width for probing, in seconds", type=int
+        probe_group.add_argument(
+            "-l",
+            "--probing-width",
+            default=None,
+            help="width for probing, in seconds",
+            type=int,
         ),
     )
-    prob_group.add_argument(
-        "-m", default=None, help="minimum number of packets in probing", type=int
+    probe_group.add_argument(
+        "-m",
+        "--probing-mincount",
+        default=None,
+        help="minimum number of packets in probing",
+        type=int,
     )
     scan_group = parser.add_argument_group("Scanning")
     scan_group.add_argument(
-        "-n", default=None, help="the width for scanning, in portID", type=int
+        "-n",
+        "--scanning-width",
+        default=None,
+        help="the width for scanning, in portID",
+        type=int,
     )
     scan_group.add_argument(
-        "-p", default=None, help="minimum number of packets in scanning", type=int
+        "-p",
+        "--scanning-mincount",
+        default=None,
+        help="minimum number of packets in scanning",
+        type=int,
     )
 
     # If argv is none, automatically looks at sys.args
@@ -559,17 +575,17 @@ def main(argv=None) -> None:
     execute_probing = False
     execute_scanning = False
     # If probing is present
-    if args.l != None and args.m != None:
+    if args.probing_width != None and args.probing_mincount != None:
         execute_probing = True
     # If scanning is present
-    if args.n != None and args.p != None:
+    if args.scanning_width != None and args.scanning_mincount != None:
         execute_scanning = True
     # If neither is present
     if not execute_probing and not execute_scanning:
         print("both [-l -m] and/or both [-n -p] need to be present")
         return
 
-    file_path: str = args.f
+    file_path: str = args.filepath
     with open(file_path, "rb") as f:
         file = PcapFile(
             Path(file_path).stem,
@@ -644,18 +660,19 @@ def main(argv=None) -> None:
             for src_ip, entries in src_addr_to_tmstmp_port_tuple.items():
                 for ts, dst_port in entries:
                     key = (src_ip, dst_port)
-                    # If we've previously had this port pinged within args.l time, then append it to the same probing chunk
+                    # If we've previously had this port pinged within args.probing_width time, then append it to the same probing chunk
                     if (len(src_ip_port_tuple_to_chunks[key]) != 0) and (
-                        (ts - src_ip_port_tuple_to_chunks[key][-1][-1]) <= args.l
+                        (ts - src_ip_port_tuple_to_chunks[key][-1][-1])
+                        <= args.probing_width
                     ):
                         src_ip_port_tuple_to_chunks[key][-1].append(ts)
                     # Otherwise, create a new chunk
                     else:
                         src_ip_port_tuple_to_chunks[key].append([ts])
-            # Now check all of the chunks of size >= args.m, and print those out
+            # Now check all of the chunks of size >= args.probing_mincount, and print those out
             for (src_ip, port), chunks in src_ip_port_tuple_to_chunks.items():
                 for chunk in chunks:
-                    if len(chunk) >= args.m:
+                    if len(chunk) >= args.probing_mincount:
                         chunk_length = len(chunk)
                         print(
                             f"\n{src_ip=}\n"
@@ -682,16 +699,16 @@ def main(argv=None) -> None:
 
                 scan_chunk = []
                 for port in ports:
-                    # If we've previously had a smaller port# within args.n, then append it to the same scan chunk
+                    # If we've previously had a smaller port# within args.scanning_width, then append it to the same scan chunk
                     if (len(scan_chunk) != 0) and (
-                        (port - scan_chunk[-1][-1]) <= args.n
+                        (port - scan_chunk[-1][-1]) <= args.scanning_width
                     ):
                         scan_chunk[-1].append(port)
                     # Otherwise, create a new scan chunk
                     else:
                         scan_chunk.append([port])
                 for scan_chunk in scan_chunk:
-                    # If a scan chunk has >= args.p ports in it, then print it out
+                    # If a scan chunk has >= args.scanning_mincountports in it, then print it out
                     if len(scan_chunk) >= args.p:
                         scan_length = len(scan_chunk)
                         print(
