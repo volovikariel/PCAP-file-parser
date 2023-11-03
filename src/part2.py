@@ -575,14 +575,16 @@ def main(argv=None) -> None:
     execute_probing = False
     execute_scanning = False
     # If probing is present
-    if args.probing_width != None and args.probing_mincount != None:
+    if args.probing_width is not None and args.probing_mincount is not None:
         execute_probing = True
     # If scanning is present
-    if args.scanning_width != None and args.scanning_mincount != None:
+    if args.scanning_width is not None and args.scanning_mincount is not None:
         execute_scanning = True
     # If neither is present
     if not execute_probing and not execute_scanning:
-        print("both [-l -m] and/or both [-n -p] need to be present")
+        print(
+            "either [-l -m]/[--probing-width --probing-mincount] and/or [-n -p][--scanning-width --scanning-mincount] needs to be present"
+        )
         return
 
     file_path: str = args.filepath
