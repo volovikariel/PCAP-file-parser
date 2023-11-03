@@ -532,7 +532,7 @@ class ApplicationPacket:
     pass
 
 
-def main() -> None:
+def main(argv=None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("-f", required=True, help="filename")
     parser.add_argument("-t", required=True, help="target IP address")
@@ -553,7 +553,8 @@ def main() -> None:
         "-p", default=None, help="minimum number of packets in scanning", type=int
     )
 
-    args = parser.parse_args()
+    # If argv is none, automatically looks at sys.args
+    args = parser.parse_args(argv)
 
     execute_probing = False
     execute_scanning = False
