@@ -1,5 +1,5 @@
 # PCap file format information found here: https://wiki.wireshark.org/Development/LibpcapFileFormat
-import glob
+import argparse
 import ipaddress
 import logging
 import os
@@ -14,12 +14,10 @@ enable_dev_logging = False
 if not enable_dev_logging:
     dev_logging.setLevel(logging.CRITICAL + 1)
 
-PCAP_DIR = "example-files/input/part1"
-
 
 class MagicNumber:
-    little_endian = b"\xD4\xC3\xB2\xA1"
-    big_endian = b"\xA1\xB2\xC3\xD4"
+    little_endian = b"\xd4\xc3\xb2\xa1"
+    big_endian = b"\xa1\xb2\xc3\xd4"
 
 
 # https://www.tcpdump.org/linktypes.html
@@ -28,8 +26,8 @@ class LinkType:
 
 
 # For protocol numbers source, see: https://en.wikipedia.org/wiki/List_of_IP_protocol_numbers
-class NetworkProtocol:
-    ICMP = 1
+class TransportProtocol:
+    ICMP = 1  # Not supported
     TCP = 6
     UDP = 17
 
@@ -171,6 +169,12 @@ class LinkPacket:
                 self.network_packet = IPv4Packet(
                     self, self.payload[: 4 * ihl], self.payload[4 * ihl :]
                 )
+            case InternetType.ipv6:
+                self.network_packet = IPv6Packet(
+                    self,
+                    self.payload[: IPv6Packet.IPV6_HEADER_START_LENGTH],
+                    self.payload[IPv6Packet.IPV6_HEADER_START_LENGTH :],
+                )
             case InternetType.arp:
                 self.network_packet = ARPPacket(
                     self,
@@ -181,8 +185,7 @@ class LinkPacket:
                 dev_logging.warning("IEEE 802.3 and 802.2 packets are not supported.")
             case _:
                 dev_logging.warning(
-                    "Unsupported link layer packet format.\n"
-                    "Only IPv4 and ARP packets supported."
+                    f"Unsupported link layer packet format {self.type_length}."
                 )
         return self.network_packet
 
@@ -193,11 +196,9 @@ class EthernetPacket(LinkPacket):
     # Ethernet headers https://wiki.wireshark.org/Ethernet#packet-format
 
     def __init__(
-        self, parent_container: PcapPacket, headers: bytes, payload: bytes
+        self, parent_packet: PcapPacket, headers: bytes, payload: bytes
     ) -> None:
-        self.parent_container = parent_container
-        self.headers = headers
-        self.payload = payload
+        super().__init__(parent_packet, headers, payload)
 
         self.header_structure = (
             # Big endian
@@ -228,7 +229,7 @@ class NetworkPacket:
 
     def parse(self):
         match self.get_protocol():
-            case NetworkProtocol.TCP:
+            case TransportProtocol.TCP:
                 # data_offset represents the #of 4 byte chunks that compose the TCP headers
                 data_offset = self.payload[12] >> 4
                 self.transport_packet = TCPPacket(
@@ -236,15 +237,71 @@ class NetworkPacket:
                     self.payload[: data_offset * 4],
                     self.payload[4 * data_offset :],
                 )
+            case TransportProtocol.UDP:
+                self.transport_packet = UDPPacket(
+                    self,
+                    self.payload[: UDPPacket.UDP_HEADERS_LENGTH],
+                    self.payload[UDPPacket.UDP_HEADERS_LENGTH :],
+                )
             case _:
+                # Note: I don't support network packets containing other network packets...
                 dev_logging.warning(
-                    f"Protocol #{self.get_protocol()} is not supported for the Network Layer."
+                    f"Protocol #{hex(self.get_protocol())} is not supported for the Transport Layer.\n"
                 )
         return self.transport_packet
 
     def get_protocol(self):
         """Implementation in the children."""
         pass
+
+
+class IPv6Packet(NetworkPacket):
+    IPV6_HEADER_START_LENGTH = 40
+
+    def __init__(
+        self, parent_packet: LinkPacket, headers: bytes, payload: bytes
+    ) -> None:
+        super().__init__(parent_packet, headers, payload)
+
+        # https://en.wikipedia.org/wiki/IPv6_packet#Fixed_header
+        header_structure = (
+            # Big endian
+            ">"
+            # 4 bits Version + 4 bits traffic class
+            "B"
+            # 4 bits traffic class + 4 bits flow label
+            "B"
+            # 2 bytes rest of flow label
+            "H"
+            # 2 bytes /* Payload length */
+            "H"
+            # 1 byte /* Next header */
+            "B"
+            # 1 byte /* Hop limit */
+            "B"
+            # 16 bytes /* Source Address */
+            "IIII"
+            # 16 bytes /* Destination Address */
+            "IIII"
+        )
+
+        headers_raw = struct.unpack(header_structure, self.headers)
+
+        self.version = headers_raw[0] >> 4
+        # 4 low bits of byte 1 + 4 high bits of byte 2
+        self.traffic_class = ((headers_raw[0] & 0xF) << 4) + (headers_raw[1] >> 4)
+        # 4 low bits of byte 2 + header_raw[3] which contains the 2 remaining bytes
+        #  doing a << (2*8) because the lower bits of byte#2 are the upper bits of the resulting 20 bit number, of which the top 4 bits are thus offset by 16=2*8 bits
+        self.flow_label = ((headers_raw[2] & 0xF) << 2 * 8) + headers_raw[3]
+        self.next_header = headers_raw[4]
+        self.hop_limit = headers_raw[5]
+        self.src_addr = ipaddress.IPv6Address(headers_raw[6])
+        self.dst_addr = ipaddress.IPv6Address(headers_raw[7])
+
+    def get_protocol(self):
+        # Note: I don't parse all of the many extension headers with their own options and all that
+        #       It would be quite tedious to write it all out...
+        return self.next_header
 
 
 class IPv4Packet(NetworkPacket):
@@ -304,8 +361,6 @@ class IPv4Packet(NetworkPacket):
         self.dst_addr = ipaddress.IPv4Address(headers_raw[9])
         self.options = headers_raw[10:] if len(option_bytes) != 0 else None
 
-        self.transport_packet: Optional[TransportPacket] = None
-
     def get_protocol(self):
         return self.protocol
 
@@ -320,7 +375,7 @@ class ARPPacket(NetworkPacket):
         super().__init__(parent_packet, headers, payload)
 
         # https://en.wikipedia.org/wiki/Address_Resolution_Protocol#Packet_structure
-        header_structure = (
+        arp_header_structure = (
             # Big endian
             ">"
             # 2 bytes /* htype, hardware type */
@@ -343,7 +398,7 @@ class ARPPacket(NetworkPacket):
             "I"
         )
 
-        raw_headers = struct.unpack(header_structure, self.headers)
+        raw_headers = struct.unpack(arp_header_structure, self.headers)
 
         self.htype = raw_headers[0]
         self.ptype = raw_headers[1]
@@ -368,7 +423,12 @@ class ARPPacket(NetworkPacket):
 
 
 class TransportPacket:
-    def __init__(self) -> None:
+    def __init__(
+        self, parent_packet: NetworkPacket, headers: bytes, payload: bytes
+    ) -> None:
+        self.parent_packet = parent_packet
+        self.headers = headers
+        self.payload = payload
         self.application_packet: Optional[ApplicationPacket] = None
 
     def parse(self):
@@ -381,10 +441,7 @@ class TCPPacket(TransportPacket):
     def __init__(
         self, parent_packet: NetworkPacket, headers: bytes, payload: bytes
     ) -> None:
-        super().__init__()
-        self.parent_packet = parent_packet
-        self.headers = headers
-        self.payload = payload
+        super().__init__(parent_packet, headers, payload)
 
         # https://en.wikipedia.org/wiki/Transmission_Control_Protocol#TCP_segment_structure
 
@@ -442,113 +499,225 @@ class TCPPacket(TransportPacket):
         self.options = raw_headers[9:] if len(option_bytes) != 0 else None
 
 
+class UDPPacket(TransportPacket):
+    UDP_HEADERS_LENGTH = 8
+
+    def __init__(
+        self, parent_packet: NetworkPacket, headers: bytes, payload: bytes
+    ) -> None:
+        super().__init__(parent_packet, headers, payload)
+
+        # https://en.wikipedia.org/wiki/User_Datagram_Protocol#UDP_datagram_structure
+        udp_header_structure = (
+            # Big endian
+            ">"
+            # 2 bytes /* src port */
+            "H"
+            # 2 bytes /* dst port */
+            "H"
+            # 2 bytes /* length */
+            "H"
+            # 2 byte /* checksum */
+            "H"
+        )
+
+        raw_headers = struct.unpack(udp_header_structure, self.headers)
+        self.src_port = raw_headers[0]
+        self.dst_port = raw_headers[1]
+        self.length = raw_headers[2]
+        self.checksum = raw_headers[3]
+
+
 class ApplicationPacket:
     pass
 
 
-def main() -> None:
-    pcap_files: list[PcapFile] = list()
-    for file_path in glob.glob(f"{PCAP_DIR}/*.pcap"):
-        with open(file_path, "rb") as f:
-            file = PcapFile(
-                Path(file_path).stem,
-                f.read(PcapFile.HEADER_LENGTH),
-                f.read(),
-                os.path.getsize(file_path),
+def main(argv=None) -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-f", "--filepath", required=True, help="filename")
+    parser.add_argument("-t", "--target-ip", required=True, help="target IP address")
+    probe_group = parser.add_argument_group("Probing")
+    (
+        probe_group.add_argument(
+            "-l",
+            "--probing-width",
+            default=None,
+            help="width for probing, in seconds",
+            type=int,
+        ),
+    )
+    probe_group.add_argument(
+        "-m",
+        "--probing-mincount",
+        default=None,
+        help="minimum number of packets in probing",
+        type=int,
+    )
+    scan_group = parser.add_argument_group("Scanning")
+    scan_group.add_argument(
+        "-n",
+        "--scanning-width",
+        default=None,
+        help="the width for scanning, in portID",
+        type=int,
+    )
+    scan_group.add_argument(
+        "-p",
+        "--scanning-mincount",
+        default=None,
+        help="minimum number of packets in scanning",
+        type=int,
+    )
+
+    # If argv is none, automatically looks at sys.args
+    args = parser.parse_args(argv)
+    execute_probing = False
+    execute_scanning = False
+    # If probing is present
+    if args.probing_width is not None and args.probing_mincount is not None:
+        execute_probing = True
+    # If scanning is present
+    if args.scanning_width is not None and args.scanning_mincount is not None:
+        execute_scanning = True
+    # If neither is present
+    if not execute_probing and not execute_scanning:
+        print(
+            "either [-l -m]/[--probing-width --probing-mincount] and/or [-n -p][--scanning-width --scanning-mincount] needs to be present"
+        )
+        return
+
+    file_path: str = args.filepath
+    with open(file_path, "rb") as f:
+        file = PcapFile(
+            Path(file_path).stem,
+            f.read(PcapFile.HEADER_LENGTH),
+            f.read(),
+            os.path.getsize(file_path),
+        )
+        file.extract_packets()
+        file.parse_packets()
+
+        # The parsers run in order (first PcapPacket.parse is ran, then LinkPacket.parse, etc.)
+        # If the result of parsing is None (which means, we have reached the end of the packet, there's nothing more to parse)
+        # For Example: We have an ethernet packet, no network/transport payload. Then parsing the ethernet packet will return None.
+        #              Therefore, the NetworkPacket.parse and TransportPacket.parse methods won't be ran.
+        parsers = [
+            PcapPacket.parse,
+            LinkPacket.parse,
+            NetworkPacket.parse,
+            TransportPacket.parse,
+        ]
+
+        for packet in file.pcap_packets:
+            curr_packet = packet
+            for parser in parsers:
+                if curr_packet is None:
+                    break
+                curr_packet = parser(curr_packet)
+
+        # All packets have been parsed as much as they can, now go through them and remove all non-UDP and non-TCP packets
+        # Also remove the packets whose dst_ip is not that of the target ip
+        tcp_udp_packets: list[TransportPacket] = list()
+        for packet in file.pcap_packets:
+            try:
+                network_packet = packet.link_packet.network_packet
+                # Only consider the ones with dst_addr == the target_addr
+                if str(network_packet.dst_addr) != args.target_ip:
+                    continue
+                if (
+                    network_packet.get_protocol() == TransportProtocol.TCP
+                    or network_packet.get_protocol() == TransportProtocol.UDP
+                ):
+                    transport_packet = network_packet.transport_packet
+                    tcp_udp_packets.append(transport_packet)
+            # Packets that don't go down to the transport layer are ignored
+            except:
+                continue
+
+        # Now we will organize it based on src_addr's
+        src_addr_to_tmstmp_port_tuple = defaultdict(list)
+        for packet in tcp_udp_packets:
+            dst_port = packet.dst_port
+
+            network_packet = packet.parent_packet
+            src_addr = network_packet.src_addr
+
+            ts_sec = int(network_packet.parent_packet.parent_packet.ts_sec)
+            ts_usec = int(network_packet.parent_packet.parent_packet.ts_usec)
+            # For a prettier output, display both seconds and the microseconds
+            ts = float(f"{ts_sec}.{ts_usec}")
+
+            src_addr_to_tmstmp_port_tuple[str(src_addr)].append((ts, dst_port))
+
+        if execute_probing:
+            print(
+                (((os.get_terminal_size().columns - 7) // 2) * "#")
+                + "Probing"
+                + (((os.get_terminal_size().columns - 7) // 2) * "#")
             )
-            file.extract_packets()
-            file.parse_packets()
+            # Note, it's already sorted by time, as we're reading the file top to bottom, so we can run our
+            # probing detection algorithm now
+            src_ip_port_tuple_to_chunks = defaultdict(list)
+            for src_ip, entries in src_addr_to_tmstmp_port_tuple.items():
+                for ts, dst_port in entries:
+                    key = (src_ip, dst_port)
+                    # If we've previously had this port pinged within args.probing_width time, then append it to the same probing chunk
+                    if (len(src_ip_port_tuple_to_chunks[key]) != 0) and (
+                        (ts - src_ip_port_tuple_to_chunks[key][-1][-1])
+                        <= args.probing_width
+                    ):
+                        src_ip_port_tuple_to_chunks[key][-1].append(ts)
+                    # Otherwise, create a new chunk
+                    else:
+                        src_ip_port_tuple_to_chunks[key].append([ts])
+            # Now check all of the chunks of size >= args.probing_mincount, and print those out
+            for (src_ip, port), chunks in src_ip_port_tuple_to_chunks.items():
+                for chunk in chunks:
+                    if len(chunk) >= args.probing_mincount:
+                        chunk_length = len(chunk)
+                        print(
+                            f"\n{src_ip=}\n"
+                            f"{port=}\n"
+                            f"{chunk_length=}\n"
+                            f"Timestamps: {','.join(map(str, chunk))}"
+                        )
+            print(os.get_terminal_size().columns * "#")
 
-            # The parsers run in order (first PcapPacket.parse is ran, then LinkPacket.parse, etc.)
-            # If the result of parsing is None (which means, we have reached the end of the packet, there's nothing more to parse)
-            # For Example: We have an ethernet packet, no network/transport payload. Then parsing the ethernet packet will return None.
-            #              Therefore, the NetworkPacket.parse and TransportPacket.parse methods won't be ran.
-            parsers = [
-                PcapPacket.parse,
-                LinkPacket.parse,
-                NetworkPacket.parse,
-                TransportPacket.parse,
-            ]
-
-            for packet in file.pcap_packets:
-                curr_packet = packet
-                for parser in parsers:
-                    if curr_packet is None:
-                        break
-                    curr_packet = parser(curr_packet)
-
-            pcap_files.append(file)
-
-    print("#1")
-    all_packets: list[PcapPacket] = list()
-    total_num_packets = 0
-    for file in pcap_files:
-        print(f"#Packets in {file.name}: {len(file.pcap_packets)}")
-        total_num_packets += len(file.pcap_packets)
-        all_packets += file.pcap_packets
-    print(f"#Packets in total: {total_num_packets}")
-
-    print("\n#2")
-    src_addr_to_packet: dict[str, list[LinkPacket]] = defaultdict(list)
-    for packet in all_packets:
-        link_packet = packet.link_packet
-        if not link_packet:
-            continue
-
-        network_packet = link_packet.network_packet
-        if not network_packet:
-            continue
-        # If it's a network type (say ethernet) that has a src_addr
-        if hasattr(network_packet, "src_addr"):
-            src_addr_to_packet[network_packet.src_addr].append(packet)
-
-    for src_addr, packets in sorted(
-        src_addr_to_packet.items(),
-        # Sorting in descending order of #packets, and then by the src ip
-        key=lambda kv_pair: (len(kv_pair[1]), kv_pair[0]),
-        reverse=True,
-    ):
-        print(f"src IP {src_addr} is associated with: {len(packets)} packets")
-
-    print("\n#3")
-    dst_port_to_packet: dict[str, list[TransportPacket]] = defaultdict(list)
-    for packet in all_packets:
-        try:
-            dst_port_to_packet[
-                packet.link_packet.network_packet.transport_packet.dst_port
-            ].append(packet)
-        # Non-TCP/UDP packets will throw an exception and thus not be added to the dict
-        except:
-            pass
-
-    for dst_port, packets in sorted(
-        dst_port_to_packet.items(),
-        # Sorting in descending order of #packets, and then by the dst port
-        key=lambda kv_pair: (len(kv_pair[1]), kv_pair[0]),
-        reverse=True,
-    ):
-        print(f"dst port {dst_port} is associated with: {len(packets)} packets")
-
-    print("\n#4")
-    # Making it tuples so as to then be able to sort the IP addresses
-    src_ip_dst_port_tuples: set[tuple[ipaddress.IPv4Address, int]] = set()
-    for packet in all_packets:
-        try:
-            network_packet = packet.link_packet.network_packet
-            transport_packet = network_packet.transport_packet
-            src_ip_dst_port_tuples.add(
-                (network_packet.src_addr, transport_packet.dst_port)
+        if execute_scanning:
+            print(
+                (((os.get_terminal_size().columns - 8) // 2) * "#")
+                + "Scanning"
+                + (((os.get_terminal_size().columns - 8) // 2) * "#")
             )
-        # Non-TCP/UDP packets will throw an exception and thus not be added to the dict
-        except:
-            pass
+            for src_ip, entries in src_addr_to_tmstmp_port_tuple.items():
+                # Add all unique ports from this src_ip to the target_ip
+                ports = set()
+                for _, dst_port in entries:
+                    ports.add(dst_port)
 
-    for src_addr, dst_port in sorted(
-        src_ip_dst_port_tuples,
-        reverse=True,
-    ):
-        print(f"src IP={str(src_addr)}, dst port={dst_port}")
-    print(f"total of {len(src_ip_dst_port_tuples)} distinct (src IP, dst port) tuples")
+                # Sort them to facilitate scanning
+                ports = sorted(list(ports))
+
+                scan_chunk = []
+                for port in ports:
+                    # If we've previously had a smaller port# within args.scanning_width, then append it to the same scan chunk
+                    if (len(scan_chunk) != 0) and (
+                        (port - scan_chunk[-1][-1]) <= args.scanning_width
+                    ):
+                        scan_chunk[-1].append(port)
+                    # Otherwise, create a new scan chunk
+                    else:
+                        scan_chunk.append([port])
+                for scan_chunk in scan_chunk:
+                    # If a scan chunk has >= args.scanning_mincountports in it, then print it out
+                    if len(scan_chunk) >= args.scanning_mincount:
+                        scan_length = len(scan_chunk)
+                        print(
+                            f"\n{src_ip=}\n"
+                            f"{scan_length=}\n"
+                            f"Scanned ports: {','.join(map(str, scan_chunk))}"
+                        )
+            print(os.get_terminal_size().columns * "#")
 
 
 if __name__ == "__main__":

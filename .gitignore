@@ -2,9 +2,8 @@
 *
 # Except for:
 !.gitignore
-!requirements.txt
+!README.md
 !/src
 !/src/*.py
 !/example-files/
 !/example-files/**/*
-!requirements.txt
